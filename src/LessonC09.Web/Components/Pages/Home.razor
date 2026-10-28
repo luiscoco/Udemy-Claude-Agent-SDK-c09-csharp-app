@@ -1,0 +1,45 @@
+﻿@page "/"
+@using LessonC09.Web.Lessons
+
+<PageTitle>C@(StreamRecoveryLesson.Number.ToString("00")) · @StreamRecoveryLesson.Title</PageTitle>
+
+<main class="wrap">
+    <section id="application-lab" aria-label="Application navigation">
+        <nav class="student-nav" aria-label="Application sections" data-enhance-nav="false">
+            <a href="/guide.html#learning">What you will learn</a>
+            <a href="/guide.html#run-guide">How to run</a>
+            <a href="/architecture.html">Architecture &amp; workflow</a>
+            <a href="/#application-lab">Application lab</a>
+            <button id="student-theme-toggle" type="button" aria-pressed="false">Switch to dark mode</button>
+        </nav>
+    </section>
+    <header>
+        <div class="brand">How <span>Claude Managed Agents</span> Works</div>
+        <span class="badge">CONCEPT @StreamRecoveryLesson.Number.ToString("00") / 60</span>
+    </header>
+    <section class="hero">
+        <div>
+            <p class="eyebrow">LEARN BY RUNNING THE EXPERIMENT</p>
+            <h1>@StreamRecoveryLesson.Title</h1>
+            <p class="lead">@StreamRecoveryLesson.Description</p>
+        </div>
+        <img src="/astronaut.png" alt="" class="astronaut">
+    </section>
+    <nav class="flow" aria-label="Experiment workflow">
+        <div><b>01</b><span>Configure<br><small>Choose a scenario</small></span></div><i>→</i>
+        <div><b>02</b><span>Run<br><small>Execute the host logic</small></span></div><i>→</i>
+        <div><b>03</b><span>Verify<br><small>Inspect the evidence</small></span></div>
+    </nav>
+
+    <LabWorkbench @rendermode="InteractiveServer" />
+
+    <section class="card source">
+        <h2>How it works</h2>
+        <p>The C# below is the actual lesson implementation executed by the local server.</p>
+        <details>
+            <summary>Read Lessons/StreamRecoveryLesson.cs</summary>
+            <pre id="code">@LessonSource.Text</pre>
+        </details>
+    </section>
+    <footer>CONFIGURE → RUN → VERIFY · Student sample application (Blazor · .NET 10)</footer>
+</main>

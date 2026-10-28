@@ -1,0 +1,30 @@
+/* Page-level tweaks carried over from the original index.html inline styles. */
+body { font-size: 20px; }
+.card p, .status, .data code, .events li, .flow small, .orb small, .badge { font-size: 18px; }
+.card label { font-size: 20px; }
+.student-nav { clear: both; }
+main { min-width: 0; }
+pre { max-width: 100%; overflow: auto; }
+#live-answer > :first-child { margin-top: 0; }
+#live-answer > :last-child { margin-bottom: 0; }
+#live-answer h1, #live-answer h2, #live-answer h3 { font-size: 22px; margin: 0 0 10px; }
+#live-answer code { font: 16px Consolas, monospace; background: #d6f3e5; border-radius: 5px; padding: 1px 5px; }
+
+#blazor-error-ui {
+    background: #fff2e5;
+    border-top: 2px solid #ff8900;
+    bottom: 0;
+    display: none;
+    left: 0;
+    padding: 0.6rem 1.25rem 0.7rem 1.25rem;
+    position: fixed;
+    width: 100%;
+    z-index: 1000;
+}
+
+#blazor-error-ui .dismiss {
+    cursor: pointer;
+    position: absolute;
+    right: 0.75rem;
+    top: 0.5rem;
+}

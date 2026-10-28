@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>C09 · Stream Recovery without Lost Events</title>
+<link rel="stylesheet" href="/student.css"><link rel="stylesheet" href="/code-highlighting.css">
+</head>
+<body>
+<main class="student-shell">
+<div class="student-brand"><a href="/">How <span>Claude Managed Agents</span> Works</a><span class="student-badge">CONCEPT 09 / 60</span></div>
+<div class="student-hero"><div><div class="student-eyebrow">STUDENT APPLICATION GUIDE</div><h1>Stream Recovery without Lost Events</h1><p>Understand the concepts, follow the source code, and verify the application yourself.</p></div><img src="/astronaut.png" alt=""></div>
+<nav class="student-nav" aria-label="Application sections"><a href="/guide.html#learning">What you will learn</a><a href="/guide.html#run-guide">How to run</a><a href="/architecture.html">Architecture &amp; workflow</a><a href="/#application-lab">Application lab</a><button id="student-theme-toggle" type="button" aria-pressed="false">Switch to dark mode</button></nav>
+
+<section class="student-section">
+<h2>Step 0 · Prepare the application before the workflow</h2>
+<p>No API key is required for the local experiment. Optional live commentary requires your own API key, agent ID and environment ID. It explains the local result; it does not activate the integration discussed in the lesson.</p>
+<p>For the optional live path, set your API key, then run <code>dotnet run --project src/LessonC09.Web -- setup</code> if you do not already have resource IDs. The command creates the environment before a text-only agent, saves each ID immediately, and reuses IDs already configured. It uses CLAUDE_MODEL or the source default; choose a model available to your account. An uncertain network failure may have created a resource: inspect your account before retrying.</p>
+<pre><code class="language-powershell">dotnet restore
+Copy-Item .env.example .env
+dotnet run --project src/LessonC09.Web</code></pre>
+<p>Create your local .env from this safe template. The local path needs no remote resources.</p>
+<p class="student-source">Source: .env.example · starting at line 1</p>
+<pre><code class="language-dotenv"># Copy to .env and enter your own local configuration. Never commit .env.
+ANTHROPIC_API_KEY=your_api_key
+CLAUDE_MANAGED_AGENT_ID=your_agent_id
+CLAUDE_MANAGED_ENVIRONMENT_ID=your_environment_id
+PORT=3009</code></pre>
+<p>Optional prerequisite: the environment is created before the agent. Missing IDs are saved in .env; configured IDs are reused. This step is separate from each runtime experiment.</p>
+<p class="student-source">Source: src/LessonC09.Web/Live/ResourceSetup.cs</p>
+<pre><code class="language-csharp">if (!Valid(Environment.GetEnvironmentVariable("CLAUDE_MANAGED_ENVIRONMENT_ID")))
+{
+    var environment = await client.Beta.Environments.Create(new EnvironmentCreateParams
+    {
+        Name = "C09 student environment",
+        Config = new BetaCloudConfigParams { Networking = new BetaLimitedNetworkParams() },
+    });
+    // Save immediately so a later agent failure does not lose the environment ID.
+    await Save("CLAUDE_MANAGED_ENVIRONMENT_ID", environment.ID);
+}
+if (!Valid(Environment.GetEnvironmentVariable("CLAUDE_MANAGED_AGENT_ID")))
+{
+    var agent = await client.Beta.Agents.Create(new AgentCreateParams
+    {
+        Name = "C09 text-only student agent",
+        Model = new BetaManagedAgentsModelConfigParams { ID = string.IsNullOrWhiteSpace(model) ? "claude-opus-5-5" : model },
+        System = "Answer the student's question clearly and briefly.",
+        Tools = [], McpServers = [], Skills = [],
+    });
+    await Save("CLAUDE_MANAGED_AGENT_ID", agent.ID);
+}</code></pre>
+</section>
+
+<section class="student-section">
+<h2>UML sequence diagram</h2>
+<p>Read from top to bottom. Columns are participants; arrows are ordered messages. Open the full-size image or scroll horizontally to read every label.</p>
+<p><a href="/architecture.svg">Open the full-size diagram</a></p>
+<img src="/architecture.svg" alt="UML sequence diagram showing the actual lesson application workflow" style="max-width:100%">
+</section>
+
+<section class="student-section">
+<h2>Walk through the application step by step</h2>
+
+<h3>1 · Load scenarios and collect input</h3>
+<p>The interactive <code>LabWorkbench</code> component renders editable fields for the selected scenario. Clicking Run travels over the Blazor Server circuit straight to <code>LabRunner</code>; no browser fetch is involved. The same runner also backs <code>POST /api/run</code> for scripts.</p>
+<p class="student-source">Source: src/LessonC09.Web/Components/Pages/LabWorkbench.razor</p>
+<pre><code class="language-csharp">private async Task Run(bool live)
+{
+    running = true;
+    try
+    {
+        var input = Read();
+        if (live) commentary = await Lab.RunLiveAsync(input);
+        else result = await Lab.RunLocalAsync(input);
+    }
+    catch (Exception error) when (error is LabBusyException or LessonInputException or LiveObservationException or JsonException or FormatException)
+    {
+        status = error.Message;
+    }
+    finally { running = false; }
+}</code></pre>
+
+<h3>2 · Validate the request and execute the lesson</h3>
+<p>The JSON API checks origin, content type and input size; <code>LabRunner</code> rejects concurrent experiments before calling the lesson. The result journal is separate from experiment state.</p>
+<p class="student-source">Source: src/LessonC09.Web/Lessons/LabRunner.cs</p>
+<pre><code class="language-csharp">public Task&lt;JournalEntry&gt; RunLocalAsync(JsonObject input, CancellationToken ct = default) =&gt;
+    Exclusive(async () =&gt;
+    {
+        var entry = new JournalEntry(Guid.NewGuid(), DateTimeOffset.UtcNow, StreamRecoveryLesson.Number, StreamRecoveryLesson.Run(input));
+        Directory.CreateDirectory(Path.GetDirectoryName(JournalPath)!);
+        await File.AppendAllTextAsync(JournalPath, JsonSerializer.Serialize(entry, Json) + "\n", ct);
+        return entry;
+    });
+
+private async Task&lt;T&gt; Exclusive&lt;T&gt;(Func&lt;Task&lt;T&gt;&gt; work)
+{
+    if (!busy.Wait(0)) throw new LabBusyException();
+    try { return await work(); }
+    finally { busy.Release(); }
+}</code></pre>
+
+<h3>3 · Apply Stream Recovery without Lost Events rules</h3>
+<p>Open and buffer live observation before reading history. Process previews separately from persisted identities. Deduplicate canonical records after successful handling. Follow the conditions and evidence fields in the implementation below.</p>
+<p class="student-source">Source: src/LessonC09.Web/Lessons/StreamRecoveryLesson.cs</p>
+<pre><code class="language-csharp">trace.Add("Open and buffer live observation before reading history");
+foreach (var node in LessonInput.List(input, "historyIds").Concat(LessonInput.List(input, "liveIds")))
+{
+    if (node is not JsonValue value || !value.TryGetValue(out string? id) || id.Length == 0)
+        throw new LessonInputException("Every persisted record needs an ID");
+    if (seen.Contains(id)) { duplicates++; continue; }
+    delivered.Add(id);
+    seen.Add(id);
+}
+var preview = string.Concat(LessonInput.List(input, "previewChunks").Select(Display));</code></pre>
+
+<h3>4 · Optional live commentary</h3>
+<p class="student-note">This separate request asks a text-only Claude session to explain the local evidence. It does not perform the lesson's external integration.</p>
+<p>The host creates a bounded text-only session with the Anthropic C# SDK, connects the event stream <em>before</em> sending the user message, and reports provider evidence. Read the cleanup path before interpreting failures.</p>
+<p class="student-source">Source: src/LessonC09.Web/Live/ManagedAgentCommentary.cs</p>
+<pre><code class="language-csharp">var session = await client.Beta.Sessions.Create(new SessionCreateParams
+{
+    Agent = new BetaManagedAgentsAgentWithOverridesParams
+    {
+        ID = config["CLAUDE_MANAGED_AGENT_ID"]!, System = System,
+        Tools = [], McpServers = [], Skills = [],
+    },
+    EnvironmentID = config["CLAUDE_MANAGED_ENVIRONMENT_ID"]!,
+    Budget = new BetaManagedAgentsBudgetLimit { MaxListCost = new() { Amount = "10", Currency = "USD" } },
+}, deadline.Token);
+
+// Stream before send: awaiting the raw response returns once the stream is connected.
+using var stream = await client.WithOptions(o =&gt; o with { Timeout = TimeSpan.FromSeconds(60) })
+    .Beta.Sessions.Events.WithRawResponse.StreamStreaming(session.ID, new EventStreamParams(), deadline.Token);
+await client.Beta.Sessions.Events.Send(session.ID, new EventSendParams { Events = [ /* user.message */ ] }, deadline.Token);</code></pre>
+<p>When the stream closes without an answer, the observer reads persisted history and deduplicates by event ID: the lesson's recovery rule applied to a real session. It never re-sends the prompt or creates another session. On failure, the host sends <code>user.interrupt</code> and reports that the stop is unconfirmed.</p>
+<pre><code class="language-csharp">await foreach (var streamEvent in stream.Enumerate(deadline.Token))
+    if (observer.Deliver(JsonSerializer.SerializeToElement(streamEvent))) break;
+
+if (observer.Answer.Length == 0)
+{
+    var page = await client.Beta.Sessions.Events.List(session.ID, new EventListParams(), deadline.Token);
+    await foreach (var persisted in page.Paginate(deadline.Token))
+        observer.Recover(JsonSerializer.SerializeToElement(persisted));
+}</code></pre>
+</section>
+
+<section class="student-section">
+<h2>What the evidence proves</h2>
+<p class="student-note">Executes a recovery reducer over authored history/live records. No reconnect or remote mutation is claimed by the local experiment. Each run starts from a fresh local seed. The run journal stores results, not production workflow state.</p>
+<p>Check the displayed outcome and source together. A rendered answer alone does not prove that a tool ran, a remote operation succeeded, or work was cancelled.</p>
+</section>
+
+<footer>LESSON C09 · LEARN → CONFIGURE → RUN → VERIFY<p><a href="/guide.html#learning">Learning goals</a> · <a href="/guide.html#run-guide">Run instructions</a> · <a href="/architecture.html">Workflow</a> · <a href="/#application-lab">Lab</a></p></footer>
+</main>
+<script src="/navigation.js"></script><script defer src="/prism.js"></script><script defer src="/code-highlighting.js"></script>
+</body>
+</html>

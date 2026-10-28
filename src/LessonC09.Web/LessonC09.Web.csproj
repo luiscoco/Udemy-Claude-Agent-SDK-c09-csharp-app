@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Anthropic" Version="13.3.0" />
+    <PackageReference Include="Markdig" Version="0.41.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Shown on the lab page as "How it works". -->
+    <EmbeddedResource Include="Lessons\StreamRecoveryLesson.cs" LogicalName="lesson-source.cs" />
+  </ItemGroup>
+
+</Project>

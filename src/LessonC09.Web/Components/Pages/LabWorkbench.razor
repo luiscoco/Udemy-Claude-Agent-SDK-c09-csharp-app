@@ -1,0 +1,197 @@
+@using System.Text.Json
+@using System.Text.Json.Nodes
+@using LessonC09.Web.Lessons
+@using LessonC09.Web.Live
+@inject LabRunner Lab
+
+<div class="grid">
+    <article class="card">
+        <p class="eyebrow">THE EXPERIMENT</p>
+        <h2>Try the workflow</h2>
+        <label>
+            Scenario
+            <select value="@scenarioIndex" @onchange="SelectScenario" disabled="@running">
+                @for (var i = 0; i < scenarios.Count; i++)
+                {
+                    <option value="@i">@scenarios[i].Label</option>
+                }
+            </select>
+        </label>
+        <div id="fields">
+            @foreach (var field in fields)
+            {
+                <label @key="field.Key">
+                    @field.Label
+                    @switch (field.Kind)
+                    {
+                        case JsonValueKind.True or JsonValueKind.False:
+                            <input type="checkbox" @bind="field.Checked" />
+                            break;
+                        case JsonValueKind.Number:
+                            <input type="number" @bind="field.Text" />
+                            break;
+                        case JsonValueKind.Object or JsonValueKind.Array:
+                            <textarea rows="4" @bind="field.Text"></textarea>
+                            break;
+                        default:
+                            <input type="text" @bind="field.Text" />
+                            break;
+                    }
+                </label>
+            }
+        </div>
+        <button id="run" disabled="@running" @onclick="() => Run(live: false)">Run local experiment ↗</button>
+        <p id="status" role="status">@status</p>
+        <details>
+            <summary>What students learn</summary>
+            <ul>
+                @foreach (var concept in StreamRecoveryLesson.Concepts)
+                {
+                    <li>@concept</li>
+                }
+            </ul>
+        </details>
+    </article>
+    <article class="card results">
+        <div class="result-head"><h2>Inspect the result</h2><span class="badge">LOCAL HOST</span></div>
+        @if (result is null)
+        {
+            <p id="empty">Run a scenario to see its outcome, evidence, and execution steps.</p>
+        }
+        else
+        {
+            <div id="result">
+                <strong class="outcome" data-state="@OutcomeText">@OutcomeText</strong>
+                <p>@result.Result.Summary</p>
+                <h3>Execution steps</h3>
+                <ol>
+                    @foreach (var step in result.Result.Steps)
+                    {
+                        <li>@step</li>
+                    }
+                </ol>
+                <details open>
+                    <summary>Structured evidence</summary>
+                    @* Keyed by run ID: Prism rewrites the block, so Blazor replaces it instead of diffing it. *@
+                    <pre id="evidence" @key="result.Id">@Pretty(result.Result.Evidence)</pre>
+                </details>
+            </div>
+        }
+    </article>
+</div>
+<section class="note"><strong>Experiment scope</strong><p>@StreamRecoveryLesson.Scope</p></section>
+<section class="card">
+    <p class="eyebrow">OPTIONAL LIVE PROVIDER</p>
+    <h2>Discuss the experiment with Claude</h2>
+    <p>This creates a real text-only Managed Agents session. It explains the local result; it does not certify the experiment or test external integrations. API use may incur charges. Credentials stay on the server.</p>
+    <button id="live" disabled="@(running || !Lab.LiveConfigured)" @onclick="() => Run(live: true)">Request live commentary ↗</button>
+    @if (!Lab.LiveConfigured)
+    {
+        <p><small>Set ANTHROPIC_API_KEY, CLAUDE_MANAGED_AGENT_ID and CLAUDE_MANAGED_ENVIRONMENT_ID in .env, then restart, to enable this.</small></p>
+    }
+    @if (commentary is not null)
+    {
+        <div id="live-result">
+            @* Markdown from the model, rendered with raw HTML escaped and unsafe links removed. *@
+            <div id="live-answer" @key="commentary">@((MarkupString)SafeMarkdown.ToHtml(commentary.Answer.Length > 0 ? commentary.Answer : "No answer text was observed."))</div>
+            <details>
+                <summary>Live session evidence</summary>
+                <pre id="live-evidence" @key="commentary">@JsonSerializer.Serialize(commentary, PrettyOptions)</pre>
+            </details>
+        </div>
+    }
+</section>
+
+@code {
+    private static readonly JsonSerializerOptions PrettyOptions = new(LabRunner.Json) { WriteIndented = true };
+    private readonly IReadOnlyList<Scenario> scenarios = StreamRecoveryLesson.Cases;
+    private List<Field> fields = [];
+    private int scenarioIndex;
+    private bool running;
+    private string status = "Local experiment ready. Choose a scenario or edit its inputs.";
+    private JournalEntry? result;
+    private LiveCommentary? commentary;
+
+    private string OutcomeText => JsonSerializer.Serialize(result!.Result.Outcome).Trim('"');
+    private static string Pretty(JsonNode node) => node.ToJsonString(PrettyOptions);
+
+    protected override void OnInitialized() => Populate(scenarios[0].Input);
+
+    private void SelectScenario(ChangeEventArgs e)
+    {
+        scenarioIndex = int.Parse((string)e.Value!);
+        Populate(scenarios[scenarioIndex].Input);
+    }
+
+    private void Populate(JsonObject input) =>
+        fields = [.. input.Select(pair => Field.From(pair.Key, pair.Value))];
+
+    private JsonObject Read() =>
+        new(fields.Select(field => KeyValuePair.Create(field.Key, field.ToNode())));
+
+    private async Task Run(bool live)
+    {
+        running = true;
+        status = live ? "Waiting for the live text-only session…" : "Running the local experiment…";
+        try
+        {
+            var input = Read();
+            if (live)
+            {
+                commentary = await Lab.RunLiveAsync(input);
+                status = $"Live commentary stop reason: {commentary.StopReason}.";
+            }
+            else
+            {
+                result = await Lab.RunLocalAsync(input);
+                status = "Experiment recorded in the local run journal.";
+            }
+        }
+        catch (Exception error) when (error is LabBusyException or LessonInputException or LiveObservationException or JsonException or FormatException)
+        {
+            status = error.Message;
+        }
+        finally { running = false; }
+    }
+
+    private sealed class Field
+    {
+        public required string Key { get; init; }
+        public required JsonValueKind Kind { get; init; }
+        public string Text { get; set; } = "";
+        public bool Checked { get; set; }
+        // "historyIds" → "History Ids", matching the original client's friendly labels.
+        public string Label
+        {
+            get
+            {
+                var spaced = System.Text.RegularExpressions.Regex.Replace(Key, "([a-z])([A-Z])", "$1 $2");
+                return char.ToUpperInvariant(spaced[0]) + spaced[1..];
+            }
+        }
+
+        public static Field From(string key, JsonNode? value)
+        {
+            var kind = value?.GetValueKind() ?? JsonValueKind.Null;
+            return new Field
+            {
+                Key = key, Kind = kind,
+                Checked = kind == JsonValueKind.True,
+                Text = kind switch
+                {
+                    JsonValueKind.Object or JsonValueKind.Array => value!.ToJsonString(PrettyOptions),
+                    JsonValueKind.String => value!.GetValue<string>(),
+                    _ => value?.ToJsonString() ?? "",
+                },
+            };
+        }
+
+        public JsonNode? ToNode() => Kind switch
+        {
+            JsonValueKind.True or JsonValueKind.False => JsonValue.Create(Checked),
+            JsonValueKind.Number => JsonValue.Create(double.Parse(Text, System.Globalization.CultureInfo.InvariantCulture)),
+            JsonValueKind.Object or JsonValueKind.Array => JsonNode.Parse(Text),
+            _ => JsonValue.Create(Text),
+        };
+    }
+}
